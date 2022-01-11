@@ -1,0 +1,146 @@
+#include <iostream>
+#include <vector>
+#include <migraphx/literal.hpp>
+#include <migraphx/instruction.hpp>
+#include <migraphx/ref/target.hpp>
+#include <migraphx/verify.hpp>
+#include <migraphx/make_op.hpp>
+#include <migraphx/auto_contiguous.hpp>
+#include <migraphx/pass_manager.hpp>
+#include "test.hpp"
+
+TEST_CASE(argmax_test_nonstd_shape)
+{
+    migraphx::program p;
+    auto* mm                = p.get_main_module();
+    std::vector<float> data = {1.2255,  1.6834,  -2.0305, -0.3221, 0.4701,  0.2583, 0.7545, 2.5758,
+                               -1.6849, 0.0928,  0.9022,  -0.8765, -0.4090, 0.9301, 2.0724, -1.5706,
+                               0.4867,  -0.1493, 0.6957,  -0.2179, 0.7142,  0.7177, 0.0183, 1.3497};
+    migraphx::shape data_shape{migraphx::shape::float_type, {2, 3, 4}};
+    auto dl = mm->add_literal(migraphx::literal{data_shape, data});
+    auto dl_trans =
+        mm->add_instruction(migraphx::make_op("transpose", {{"permutation", {1, 2, 0}}}), dl);
+    mm->add_instruction(migraphx::make_op("argmax", {{"axis", -3}}), dl_trans);
+    auto p_uncompiled = p;
+    p.compile(migraphx::ref::target{});
+    auto result   = p.eval({}).back();
+    auto res_gold = p_uncompiled.eval({}).back();
+    std::vector<int64_t> result_vec;
+    result.visit([&](auto output) { result_vec.assign(output.begin(), output.end()); });
+    std::vector<int64_t> res_gold_vec;
+    res_gold.visit([&](auto output) { res_gold_vec.assign(output.begin(), output.end()); });
+    EXPECT(migraphx::verify_range(result_vec, res_gold_vec));
+}
+
+TEST_CASE(argmin_test_nonstd_shape)
+{
+    migraphx::program p;
+    auto* mm                = p.get_main_module();
+    std::vector<float> data = {1.2255,  1.6834,  -2.0305, -0.3221, 0.4701,  0.2583, 0.7545, 2.5758,
+                               -1.6849, 0.0928,  0.9022,  -0.8765, -0.4090, 0.9301, 2.0724, -1.5706,
+                               0.4867,  -0.1493, 0.6957,  -0.2179, 0.7142,  0.7177, 0.0183, 1.3497};
+    migraphx::shape data_shape{migraphx::shape::float_type, {2, 3, 4}};
+    auto dl = mm->add_literal(migraphx::literal{data_shape, data});
+    auto dl_trans =
+        mm->add_instruction(migraphx::make_op("transpose", {{"permutation", {1, 2, 0}}}), dl);
+    mm->add_instruction(migraphx::make_op("argmin", {{"axis", -1}}), dl_trans);
+    auto p_uncompiled = p;
+    p.compile(migraphx::ref::target{});
+    auto result   = p.eval({}).back();
+    auto res_gold = p_uncompiled.eval({}).back();
+    std::vector<int64_t> result_vec;
+    result.visit([&](auto output) { result_vec.assign(output.begin(), output.end()); });
+    std::vector<int64_t> res_gold_vec;
+    res_gold.visit([&](auto output) { res_gold_vec.assign(output.begin(), output.end()); });
+    EXPECT(migraphx::verify_range(result_vec, res_gold_vec));
+}
+
+TEST_CASE(scatter_test_nonstd_shape)
+{
+    migraphx::program p;
+    auto* mm = p.get_main_module();
+    migraphx::shape sd{migraphx::shape::float_type, {3, 3}};
+    std::vector<float> vd(sd.elements(), 0.0f);
+
+    migraphx::shape si{migraphx::shape::int32_type, {2, 3}};
+    std::vector<int> vi = {1, 0, 2, 0, 2, 1};
+
+    migraphx::shape su{migraphx::shape::float_type, {2, 3}};
+    std::vector<float> vu = {1.0, 1.1, 1.2, 2.0, 2.1, 2.2};
+
+    auto ld  = mm->add_literal(migraphx::literal{sd, vd});
+    auto li  = mm->add_literal(migraphx::literal{si, vi});
+    auto lu  = mm->add_literal(migraphx::literal{su, vu});
+    auto ldt = mm->add_instruction(migraphx::make_op("transpose", {{"permutation", {1, 0}}}), ld);
+    auto r   = mm->add_instruction(migraphx::make_op("scatter", {{"axis", 0}}), ldt, li, lu);
+    mm->add_return({r});
+    auto p_uncompiled = p;
+    p.compile(migraphx::ref::target{});
+    auto result = p.eval({}).back();
+    std::vector<float> results_vector;
+    auto gold = p_uncompiled.eval({}).back();
+    result.visit([&](auto output) { results_vector.assign(output.begin(), output.end()); });
+    std::vector<float> gold_vector;
+    gold.visit([&](auto output) { gold_vector.assign(output.begin(), output.end()); });
+    EXPECT(migraphx::verify_range(results_vector, gold_vector));
+}
+
+TEST_CASE(squeeze_transpose_test)
+{
+    migraphx::program p;
+    auto* mm = p.get_main_module();
+    std::vector<float> data(4 * 3 * 3);
+    migraphx::shape s1{migraphx::shape::float_type, {4, 1, 3, 1, 3}};
+    auto l0 = mm->add_literal(migraphx::literal{s1, data});
+    auto l0_trans =
+        mm->add_instruction(migraphx::make_op("transpose", {{"permutation", {1, 2, 3, 0, 4}}}), l0);
+    mm->add_instruction(migraphx::make_op("squeeze"), l0_trans);
+    auto p_uncompiled = p;
+    p.compile(migraphx::ref::target{});
+    auto result         = p.eval({}).back();
+    auto* mm_uncompiled = p_uncompiled.get_main_module();
+    // ref implementation always does the auto_contiguous pass
+    migraphx::run_passes(*mm_uncompiled, {migraphx::auto_contiguous{}});
+    auto expected_result = p_uncompiled.eval({}).back();
+    EXPECT(result.get_shape() == expected_result.get_shape());
+}
+
+TEST_CASE(squeeze_multibroadcast_test)
+{
+    migraphx::program p;
+    auto* mm = p.get_main_module();
+    std::vector<float> data(3 * 3);
+    migraphx::shape s1{migraphx::shape::float_type, {1, 3, 1, 3}};
+    auto l0       = mm->add_literal(migraphx::literal{s1, data});
+    auto l0_brcst = mm->add_instruction(
+        migraphx::make_op("multibroadcast", {{"out_lens", {4, 1, 3, 4, 3}}}), l0);
+    mm->add_instruction(migraphx::make_op("squeeze"), l0_brcst);
+    auto p_uncompiled = p;
+    p.compile(migraphx::ref::target{});
+    auto result         = p.eval({}).back();
+    auto* mm_uncompiled = p_uncompiled.get_main_module();
+    migraphx::run_passes(*mm_uncompiled, {migraphx::auto_contiguous{}});
+    auto expected_result = p_uncompiled.eval({}).back();
+    EXPECT(result.get_shape() == expected_result.get_shape());
+}
+
+TEST_CASE(squeeze_slice_test)
+{
+    migraphx::program p;
+    auto* mm = p.get_main_module();
+    std::vector<float> data(2 * 3 * 4 * 4);
+    migraphx::shape s1{migraphx::shape::float_type, {2, 3, 4, 4}};
+    auto l0       = mm->add_literal(migraphx::literal{s1, data});
+    auto l0_slice = mm->add_instruction(
+        migraphx::make_op("slice", {{"axes", {2}}, {"starts", {2}}, {"ends", {3}}}), l0);
+    mm->add_instruction(migraphx::make_op("squeeze"), l0_slice);
+    auto p_uncompiled = p;
+    p.compile(migraphx::ref::target{});
+    auto result         = p.eval({}).back();
+    auto* mm_uncompiled = p_uncompiled.get_main_module();
+    migraphx::run_passes(*mm_uncompiled, {migraphx::auto_contiguous{}});
+    auto expected_result = p_uncompiled.eval({}).back();
+    EXPECT(result.get_shape() == expected_result.get_shape());
+}
+
+int main(int argc, const char* argv[]) { test::run(argc, argv); }

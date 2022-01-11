@@ -8,6 +8,7 @@
 #include <migraphx/shape_for_each.hpp>
 #include <migraphx/config.hpp>
 #include <migraphx/value.hpp>
+#include <migraphx/argument.hpp>
 #include <migraphx/op/normalize_attribute.hpp>
 #include <cmath>
 #include <utility>
@@ -37,25 +38,28 @@ struct scatter
 
     shape normalize_compute_shape(std::vector<shape> inputs) const
     {
-        check_shapes{inputs, *this}.has(3).standard();
+        check_shapes{inputs, *this}.has(3);
+        check_shapes{{inputs.at(1), inputs.at(2)}, *this}.same_dims();
         return inputs.front();
     }
 
     argument compute(const shape& output_shape, std::vector<argument> args) const
     {
         argument result{output_shape};
+        const shape s_output_shape{output_shape.type(), output_shape.lens()};
         // max dimension in axis
         auto axis_dim_size = output_shape.lens()[axis];
         visit_all(result, args[0], args[2])([&](auto output, auto data, auto update) {
             std::copy(data.begin(), data.end(), output.begin());
             args[1].visit([&](auto indices) {
                 auto ind_s = indices.get_shape();
+                const shape std_ind_s{ind_s.type(), ind_s.lens()};
                 shape_for_each(ind_s, [&](const auto& idx) {
                     auto out_idx  = idx;
-                    auto index    = indices[ind_s.index(idx)];
+                    auto index    = indices[std_ind_s.index(idx)];
                     index         = (index < 0) ? index + axis_dim_size : index;
                     out_idx[axis] = index;
-                    output[output_shape.index(out_idx)] = update[ind_s.index(idx)];
+                    output[s_output_shape.index(out_idx)] = update[std_ind_s.index(idx)];
                 });
             });
         });
